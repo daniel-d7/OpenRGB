@@ -15,18 +15,20 @@
 
 using namespace std::chrono_literals;
 
-/*---------------------------------------------------------*| Number of attempts made for each transaction when checked |
+/*---------------------------------------------------------*\
+| Number of attempts made for each transaction when checked |
 | I/O is enabled.  DDR5 platforms share the SMBus with the  |
 | SPD hubs and PMICs, which firmware polls in the           |
 | background, so ENE transactions are occasionally NAKed.   |
 \*---------------------------------------------------------*/
-#define ENE_CHECKED_IO_ATTEMPTS         3
+#define ENE_CHECKED_IO_ATTEMPTS         5
 #define ENE_CHECKED_IO_RETRY_DELAY      1ms
 
 ENESMBusInterface_i2c_smbus::ENESMBusInterface_i2c_smbus(i2c_smbus_interface* bus, bool checked_io)
 {
     this->bus           = bus;
     this->checked_io    = checked_io;
+    this->read_error    = false;
 }
 
 ENESMBusInterface_i2c_smbus::~ENESMBusInterface_i2c_smbus()
@@ -66,9 +68,10 @@ unsigned char ENESMBusInterface_i2c_smbus::ENERegisterRead(ene_dev_id dev, ene_r
         return(bus->i2c_smbus_read_byte_data(dev, 0x81));
     }
 
-    /*-----------------------------------------------------*    | Checked read: retry the pointer write and the read as |
-    | a pair, and return 0x00 rather than 0xFF if the read  |
-    | never succeeds.  A failed read returning 0xFF would   |
+    /*-----------------------------------------------------*\
+    | Checked read: retry the pointer write and the read as |
+    | a pair.  If the read never succeeds, flag the error   |
+    | and return 0x00 rather than 0xFF, which would         |
     | otherwise show up as 255 LEDs in the config table.    |
     \*-----------------------------------------------------*/
     for(int attempt = 0; attempt < ENE_CHECKED_IO_ATTEMPTS; attempt++)
@@ -86,7 +89,18 @@ unsigned char ENESMBusInterface_i2c_smbus::ENERegisterRead(ene_dev_id dev, ene_r
         std::this_thread::sleep_for(ENE_CHECKED_IO_RETRY_DELAY);
     }
 
+    read_error = true;
+
     return(0x00);
+}
+
+bool ENESMBusInterface_i2c_smbus::TakeReadError()
+{
+    bool error = read_error;
+
+    read_error = false;
+
+    return(error);
 }
 
 void ENESMBusInterface_i2c_smbus::ENERegisterWrite(ene_dev_id dev, ene_register reg, unsigned char val)

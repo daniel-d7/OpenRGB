@@ -9,7 +9,9 @@
 |   SPDX-License-Identifier: GPL-2.0-or-later               |
 \*---------------------------------------------------------*/
 
+#include <chrono>
 #include <cstring>
+#include <thread>
 #include "ENESMBusController.h"
 #include "LogManager.h"
 
@@ -35,7 +37,36 @@ ENESMBusController::ENESMBusController(ENESMBusInterface* interface, ene_dev_id 
     this->dev           = dev;
     this->name          = dev_name;
     this->type          = dev_type;
+
+    ReadConfiguration();
+
+    /*-----------------------------------------------------*\
+    | DRAM reads can return garbage when they collide with  |
+    | other SMBus traffic, especially on DDR5 where the SPD |
+    | hubs and PMICs share the bus.  Re-read the device     |
+    | name and config table until they are valid.           |
+    \*-----------------------------------------------------*/
+    for(int attempt = 1; (type == DEVICE_TYPE_DRAM) && (led_count == 0) && (attempt < ENE_DRAM_CONFIG_ATTEMPTS); attempt++)
+    {
+        LOG_DEBUG("[ENE SMBus] Invalid configuration read from 0x%02X, retrying (attempt %d)", dev, attempt + 1);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+        ReadConfiguration();
+    }
+}
+
+bool ENESMBusController::IsDRAMVersion(const char* version)
+{
+    return((strncmp(version, "DIMM_LED-",   9)  == 0)
+        || (strncmp(version, "AUDA0-E6K5-", 11) == 0));
+}
+
+void ENESMBusController::ReadConfiguration()
+{
     supports_mode_14    = false;
+
+    interface->TakeReadError();
 
     if(interface->GetInterfaceType() != ENE_INTERFACE_TYPE_ROG_ARION)
     {
@@ -375,6 +406,17 @@ ENESMBusController::ENESMBusController(ENESMBusInterface* interface, ene_dev_id 
 
             led_count = 0;
         }
+    }
+
+    /*-----------------------------------------------------*\
+    | A read that failed on every attempt leaves a 0x00 in  |
+    | the name or config table, so the table is unreliable  |
+    \*-----------------------------------------------------*/
+    if((type == DEVICE_TYPE_DRAM) && interface->TakeReadError())
+    {
+        LOG_DEBUG("[ENE SMBus] Read errors while reading the configuration of 0x%02X", dev);
+
+        led_count = 0;
     }
 }
 

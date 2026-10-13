@@ -26,10 +26,12 @@ public:
     unsigned char       ENERegisterRead(ene_dev_id dev, ene_register reg);
     void                ENERegisterWrite(ene_dev_id dev, ene_register reg, unsigned char val);
     void                ENERegisterWriteBlock(ene_dev_id dev, ene_register reg, unsigned char * data, unsigned char sz);
+    bool                TakeReadError();
 
 private:
     i2c_smbus_interface *   bus;
     bool                    checked_io;
+    bool                    read_error;
 
     int                 SetRegisterPointer(ene_dev_id dev, ene_register reg);
 };

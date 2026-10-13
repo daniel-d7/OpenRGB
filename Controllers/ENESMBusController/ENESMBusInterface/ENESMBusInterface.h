@@ -38,4 +38,10 @@ public:
     virtual unsigned char       ENERegisterRead(ene_dev_id dev, ene_register reg) = 0;
     virtual void                ENERegisterWrite(ene_dev_id dev, ene_register reg, unsigned char val) = 0;
     virtual void                ENERegisterWriteBlock(ene_dev_id dev, ene_register reg, unsigned char * data, unsigned char sz) = 0;
+
+    /*-------------------------------------*\
+    | Returns true if a read failed since   |
+    | the last call, and clears the flag    |
+    \*-------------------------------------*/
+    virtual bool                TakeReadError() { return(false); }
 };

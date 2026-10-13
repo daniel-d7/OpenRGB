@@ -91,7 +91,46 @@ static void ENERegisterWrite(i2c_smbus_interface* bus, ene_dev_id dev, ene_regis
     bus->i2c_smbus_write_byte_data(dev, 0x01, val);
 }
 
-bool TestForENESMBusController(i2c_smbus_interface* bus, unsigned char address, bool checked_io = false)
+/*---------------------------------------------------------*\
+| Read the ENE device name, retrying until it is a known    |
+| DRAM firmware name, as reads can collide with other SMBus |
+| traffic on DDR5 platforms.                                |
+\*---------------------------------------------------------*/
+static bool TestForENEDRAMName(i2c_smbus_interface* bus, unsigned char address)
+{
+    char name[16];
+
+    for(int attempt = 0; attempt < ENE_DRAM_CONFIG_ATTEMPTS; attempt++)
+    {
+        for(int i = 0; i < 16; i++)
+        {
+            name[i] = ENERegisterRead(bus, address, ENE_REG_DEVICE_NAME + i);
+        }
+
+        name[15] = '\0';
+
+        if(ENESMBusController::IsDRAMVersion(name))
+        {
+            LOG_DEBUG("[ENE SMBus] Found DRAM device name %s at %02X on attempt %d", name, address, attempt + 1);
+            return(true);
+        }
+
+        std::this_thread::sleep_for(5ms);
+    }
+
+    LOG_VERBOSE("[ENE SMBus] No DRAM device name found at %02X", address);
+
+    return(false);
+}
+
+/*---------------------------------------------------------*\
+| checked_io:    retry reads that fail on the bus           |
+| name_fallback: if the register range test fails, accept   |
+|                the device if it reports a DRAM firmware   |
+|                name instead.  Some DDR5 ENE firmware does |
+|                not mirror 0xA0-0xAF the way DDR4 does.    |
+\*---------------------------------------------------------*/
+bool TestForENESMBusController(i2c_smbus_interface* bus, unsigned char address, bool checked_io = false, bool name_fallback = false)
 {
     bool pass = false;
 
@@ -131,6 +170,17 @@ bool TestForENESMBusController(i2c_smbus_interface* bus, unsigned char address, 
                 pass = false;
                 break;
             }
+        }
+
+        /*-------------------------------------------------*\
+        | Reading the name writes the ENE register pointer, |
+        | so never try it on the DDR5 PMIC range            |
+        \*-------------------------------------------------*/
+        if(!pass && name_fallback && ((address < 0x48) || (address > 0x4F)))
+        {
+            LOG_DEBUG("[ENE SMBus] Register range test failed at %02X, checking for a DRAM device name", address);
+
+            pass = TestForENEDRAMName(bus, address);
         }
 
         if(pass)
@@ -259,7 +309,7 @@ DetectedControllers DetectENESMBusDRAMControllers(std::vector<i2c_smbus_interfac
             // Add ENE controllers at their remapped addresses
             for(unsigned int address_list_idx = 0; address_list_idx < ENE_RAM_ADDRESS_COUNT; address_list_idx++)
             {
-                if(TestForENESMBusController(buses[bus], ene_ram_addresses[address_list_idx], is_ddr5))
+                if(TestForENESMBusController(buses[bus], ene_ram_addresses[address_list_idx], is_ddr5, all_teamgroup))
                 {
                     ENESMBusInterface_i2c_smbus*    interface      = new ENESMBusInterface_i2c_smbus(buses[bus], is_ddr5);
                     ENESMBusController*             controller     = new ENESMBusController(interface, ene_ram_addresses[address_list_idx], dram_name, DEVICE_TYPE_DRAM);

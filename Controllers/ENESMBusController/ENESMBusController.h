@@ -27,6 +27,7 @@
 #define ENE_SAVE_VAL                    0xAA        /* Value for Save Changes               */
 #define ENE_NUM_ZONES                   8           /* Number of ENE config table zones     */
 #define ENE_MAX_DRAM_LEDS               32          /* LEDs that fit in the v2 color regs   */
+#define ENE_DRAM_CONFIG_ATTEMPTS        10          /* DRAM config table read attempts      */
 
 enum
 {
@@ -137,11 +138,15 @@ public:
 
     void          UpdateDeviceName();
 
+    static bool   IsDRAMVersion(const char* version);
+
     unsigned char ENERegisterRead(ene_register reg);
     void          ENERegisterWrite(ene_register reg, unsigned char val);
     void          ENERegisterWriteBlock(ene_register reg, unsigned char * data, unsigned char sz);
 
 private:
+    void                    ReadConfiguration();
+
     char                    device_version[16];
     unsigned char           config_table[64];
     unsigned int            led_count;
