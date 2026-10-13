@@ -17,6 +17,8 @@
 #include "pci_ids.h"
 #include "RGBController.h"
 #include "RGBController_ENESMBus.h"
+#include "SPDDetector.h"
+#include "SPDWrapper.h"
 
 using namespace std::chrono_literals;
 
@@ -89,7 +91,7 @@ static void ENERegisterWrite(i2c_smbus_interface* bus, ene_dev_id dev, ene_regis
     bus->i2c_smbus_write_byte_data(dev, 0x01, val);
 }
 
-bool TestForENESMBusController(i2c_smbus_interface* bus, unsigned char address)
+bool TestForENESMBusController(i2c_smbus_interface* bus, unsigned char address, bool checked_io = false)
 {
     bool pass = false;
 
@@ -111,6 +113,16 @@ bool TestForENESMBusController(i2c_smbus_interface* bus, unsigned char address)
         for (int i = 0xA0; i < 0xB0; i++)
         {
             res = bus->i2c_smbus_read_byte_data(address, i);
+
+            /*---------------------------------------------*\
+            | With checked I/O, retry reads that failed on  |
+            | the bus.  A wrong value is never retried.     |
+            \*---------------------------------------------*/
+            for(int retry = 0; checked_io && (res < 0) && (retry < 2); retry++)
+            {
+                std::this_thread::sleep_for(1ms);
+                res = bus->i2c_smbus_read_byte_data(address, i);
+            }
 
             if (res != (i - 0xA0))
             {
@@ -146,6 +158,46 @@ bool TestForENESMBusController(i2c_smbus_interface* bus, unsigned char address)
     return(pass);
 }
 
+/*---------------------------------------------------------*\
+| Read the SPD of each slot on a DRAM bus to find out if it |
+| holds DDR5 modules and if they are all Team Group ones.   |
+| DDR5 SMBus traffic is shared with the SPD hubs and PMICs, |
+| so ENE access on these buses uses checked I/O.            |
+\*---------------------------------------------------------*/
+static void ReadENEDRAMBusInfo(i2c_smbus_interface* bus, bool& is_ddr5, bool& all_teamgroup)
+{
+    unsigned int  ddr5_slots      = 0;
+    unsigned int  teamgroup_slots = 0;
+    SPDMemoryType dram_type       = SPD_RESERVED;
+
+    for(uint8_t spd_addr = 0x50; spd_addr < 0x58; spd_addr++)
+    {
+        SPDDetector spd(bus, spd_addr, dram_type);
+
+        if(spd.is_valid())
+        {
+            dram_type = spd.memory_type();
+
+            if(dram_type == SPD_DDR5_SDRAM)
+            {
+                SPDWrapper slot(spd);
+
+                ddr5_slots++;
+
+                if(slot.jedec_id() == JEDEC_TEAMGROUP)
+                {
+                    teamgroup_slots++;
+                }
+            }
+        }
+    }
+
+    is_ddr5         = (ddr5_slots > 0);
+    all_teamgroup   = is_ddr5 && (teamgroup_slots == ddr5_slots);
+
+    LOG_DEBUG("[ENE SMBus DRAM] Bus %d: %u DDR5 slot(s), %u Team Group", bus->info.bus_id, ddr5_slots, teamgroup_slots);
+}
+
 DetectedControllers DetectENESMBusDRAMControllers(std::vector<i2c_smbus_interface*> &buses)
 {
     DetectedControllers detected_controllers;
@@ -156,6 +208,17 @@ DetectedControllers DetectENESMBusDRAMControllers(std::vector<i2c_smbus_interfac
 
         IF_DRAM_SMBUS(buses[bus]->info.pci_vendor, buses[bus]->info.pci_device)
         {
+            bool        is_ddr5         = false;
+            bool        all_teamgroup   = false;
+
+            ReadENEDRAMBusInfo(buses[bus], is_ddr5, all_teamgroup);
+
+            /*---------------------------------------------*\
+            | Team Group's ENE based DDR5 kit is the T-Force|
+            | Delta RGB DDR5                                |
+            \*---------------------------------------------*/
+            std::string dram_name       = all_teamgroup ? "Team Group T-Force Delta RGB DDR5" : "ENE DRAM";
+
             LOG_DEBUG("[ENE SMBus DRAM] Remapping ENE SMBus RAM modules on 0x77");
 
             for(unsigned int slot = 0; slot < 8; slot++)
@@ -196,10 +259,10 @@ DetectedControllers DetectENESMBusDRAMControllers(std::vector<i2c_smbus_interfac
             // Add ENE controllers at their remapped addresses
             for(unsigned int address_list_idx = 0; address_list_idx < ENE_RAM_ADDRESS_COUNT; address_list_idx++)
             {
-                if(TestForENESMBusController(buses[bus], ene_ram_addresses[address_list_idx]))
+                if(TestForENESMBusController(buses[bus], ene_ram_addresses[address_list_idx], is_ddr5))
                 {
-                    ENESMBusInterface_i2c_smbus*    interface      = new ENESMBusInterface_i2c_smbus(buses[bus]);
-                    ENESMBusController*             controller     = new ENESMBusController(interface, ene_ram_addresses[address_list_idx], "ENE DRAM", DEVICE_TYPE_DRAM);
+                    ENESMBusInterface_i2c_smbus*    interface      = new ENESMBusInterface_i2c_smbus(buses[bus], is_ddr5);
+                    ENESMBusController*             controller     = new ENESMBusController(interface, ene_ram_addresses[address_list_idx], dram_name, DEVICE_TYPE_DRAM);
 
                     if(controller->GetLEDCount() > 0)
                     {

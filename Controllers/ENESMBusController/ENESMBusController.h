@@ -26,6 +26,7 @@
 #define ENE_APPLY_VAL                   0x01        /* Value for Apply Changes Register     */
 #define ENE_SAVE_VAL                    0xAA        /* Value for Save Changes               */
 #define ENE_NUM_ZONES                   8           /* Number of ENE config table zones     */
+#define ENE_MAX_DRAM_LEDS               32          /* LEDs that fit in the v2 color regs   */
 
 enum
 {

@@ -303,6 +303,39 @@ ENESMBusController::ENESMBusController(ENESMBusInterface* interface, ene_dev_id 
         channel_cfg = ENE_CONFIG_CHANNEL_V2;
     }
     /*-----------------------------------------------------*\
+    | DIMM_LED-xxxx - Other first generation DRAM firmware  |
+    | revisions                                             |
+    \*-----------------------------------------------------*/
+    else if((type == DEVICE_TYPE_DRAM) && (strncmp(device_version, "DIMM_LED-", 9) == 0))
+    {
+        LOG_INFO("[ENE SMBus] Unlisted DRAM firmware %s at 0x%02X, using first generation registers", device_version, dev);
+
+        direct_reg  = ENE_REG_COLORS_DIRECT;
+        effect_reg  = ENE_REG_COLORS_EFFECT;
+        channel_cfg = ENE_CONFIG_CHANNEL_V1;
+    }
+    /*-----------------------------------------------------*\
+    | AUDA0-E6K5-xxxx - Other second generation DRAM        |
+    | firmware revisions (e.g. DDR5 modules)                |
+    \*-----------------------------------------------------*/
+    else if((type == DEVICE_TYPE_DRAM) && (strncmp(device_version, "AUDA0-E6K5-", 11) == 0))
+    {
+        LOG_INFO("[ENE SMBus] Unlisted DRAM firmware %s at 0x%02X, using second generation registers", device_version, dev);
+
+        direct_reg  = ENE_REG_COLORS_DIRECT_V2;
+        effect_reg  = ENE_REG_COLORS_EFFECT_V2;
+        channel_cfg = ENE_CONFIG_CHANNEL_V1;
+
+        for(std::size_t cfg_zone_idx = 0; cfg_zone_idx < ENE_NUM_ZONES; cfg_zone_idx++)
+        {
+            if(config_table[channel_cfg + cfg_zone_idx] == (unsigned char)ENE_LED_CHANNEL_DRAM_3)
+            {
+                supports_mode_14 = true;
+                break;
+            }
+        }
+    }
+    /*-----------------------------------------------------*\
     | If string does not match any known variants, set LED  |
     | count to 0 so that controller is not registered.      |
     | This protects the device against invalid operations   |
@@ -315,6 +348,33 @@ ENESMBusController::ENESMBusController(ENESMBusInterface* interface, ene_dev_id 
         effect_reg  = ENE_REG_COLORS_EFFECT;
         channel_cfg = ENE_CONFIG_CHANNEL_V1;
         led_count   = 0;
+
+        LOG_INFO("[ENE SMBus] Unrecognized device version \"%s\" at 0x%02X, ignoring device", device_version, dev);
+    }
+
+    /*-----------------------------------------------------*\
+    | DRAM config tables can come back corrupted when reads |
+    | fail (0xFF bytes).  Refuse a table that describes     |
+    | more LEDs than any ENE DRAM controller has, as        |
+    | writing past the color registers would hit the mode   |
+    | and control registers.                                |
+    \*-----------------------------------------------------*/
+    if((type == DEVICE_TYPE_DRAM) && (led_count > 0))
+    {
+        unsigned int max_leds  = ENE_MAX_DRAM_LEDS;
+        unsigned int zone_leds = 0;
+
+        for(std::size_t cfg_zone_idx = 0; cfg_zone_idx < ENE_NUM_ZONES; cfg_zone_idx++)
+        {
+            zone_leds += config_table[0x03 + cfg_zone_idx];
+        }
+
+        if((led_count > max_leds) || (zone_leds > max_leds))
+        {
+            LOG_WARNING("[ENE SMBus] %s at 0x%02X reports %u LEDs (%u in zones), more than the maximum of %u, ignoring device", device_version, dev, led_count, zone_leds, max_leds);
+
+            led_count = 0;
+        }
     }
 }
 

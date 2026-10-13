@@ -17,7 +17,7 @@
 class ENESMBusInterface_i2c_smbus : public ENESMBusInterface
 {
 public:
-    ENESMBusInterface_i2c_smbus(i2c_smbus_interface* bus);
+    ENESMBusInterface_i2c_smbus(i2c_smbus_interface* bus, bool checked_io = false);
     ~ENESMBusInterface_i2c_smbus();
 
     ene_interface_type  GetInterfaceType();
@@ -29,4 +29,7 @@ public:
 
 private:
     i2c_smbus_interface *   bus;
+    bool                    checked_io;
+
+    int                 SetRegisterPointer(ene_dev_id dev, ene_register reg);
 };

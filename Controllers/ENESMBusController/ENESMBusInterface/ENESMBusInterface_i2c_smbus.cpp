@@ -9,11 +9,24 @@
 |   SPDX-License-Identifier: GPL-2.0-or-later               |
 \*---------------------------------------------------------*/
 
+#include <chrono>
+#include <thread>
 #include "ENESMBusInterface_i2c_smbus.h"
 
-ENESMBusInterface_i2c_smbus::ENESMBusInterface_i2c_smbus(i2c_smbus_interface* bus)
+using namespace std::chrono_literals;
+
+/*---------------------------------------------------------*| Number of attempts made for each transaction when checked |
+| I/O is enabled.  DDR5 platforms share the SMBus with the  |
+| SPD hubs and PMICs, which firmware polls in the           |
+| background, so ENE transactions are occasionally NAKed.   |
+\*---------------------------------------------------------*/
+#define ENE_CHECKED_IO_ATTEMPTS         3
+#define ENE_CHECKED_IO_RETRY_DELAY      1ms
+
+ENESMBusInterface_i2c_smbus::ENESMBusInterface_i2c_smbus(i2c_smbus_interface* bus, bool checked_io)
 {
-    this->bus = bus;
+    this->bus           = bus;
+    this->checked_io    = checked_io;
 }
 
 ENESMBusInterface_i2c_smbus::~ENESMBusInterface_i2c_smbus()
@@ -37,28 +50,72 @@ int ENESMBusInterface_i2c_smbus::GetMaxBlock()
     return(3);
 }
 
+int ENESMBusInterface_i2c_smbus::SetRegisterPointer(ene_dev_id dev, ene_register reg)
+{
+    return(bus->i2c_smbus_write_word_data(dev, 0x00, ((reg << 8) & 0xFF00) | ((reg >> 8) & 0x00FF)));
+}
+
 unsigned char ENESMBusInterface_i2c_smbus::ENERegisterRead(ene_dev_id dev, ene_register reg)
 {
-    //Write ENE register
-    bus->i2c_smbus_write_word_data(dev, 0x00, ((reg << 8) & 0xFF00) | ((reg >> 8) & 0x00FF));
+    if(!checked_io)
+    {
+        //Write ENE register
+        SetRegisterPointer(dev, reg);
 
-    //Read ENE value
-    return(bus->i2c_smbus_read_byte_data(dev, 0x81));
+        //Read ENE value
+        return(bus->i2c_smbus_read_byte_data(dev, 0x81));
+    }
+
+    /*-----------------------------------------------------*    | Checked read: retry the pointer write and the read as |
+    | a pair, and return 0x00 rather than 0xFF if the read  |
+    | never succeeds.  A failed read returning 0xFF would   |
+    | otherwise show up as 255 LEDs in the config table.    |
+    \*-----------------------------------------------------*/
+    for(int attempt = 0; attempt < ENE_CHECKED_IO_ATTEMPTS; attempt++)
+    {
+        if(SetRegisterPointer(dev, reg) >= 0)
+        {
+            int res = bus->i2c_smbus_read_byte_data(dev, 0x81);
+
+            if(res >= 0)
+            {
+                return((unsigned char)res);
+            }
+        }
+
+        std::this_thread::sleep_for(ENE_CHECKED_IO_RETRY_DELAY);
+    }
+
+    return(0x00);
 }
 
 void ENESMBusInterface_i2c_smbus::ENERegisterWrite(ene_dev_id dev, ene_register reg, unsigned char val)
 {
-    //Write ENE register
-    bus->i2c_smbus_write_word_data(dev, 0x00, ((reg << 8) & 0xFF00) | ((reg >> 8) & 0x00FF));
+    if(!checked_io)
+    {
+        //Write ENE register
+        SetRegisterPointer(dev, reg);
 
-    //Write ENE value
-    bus->i2c_smbus_write_byte_data(dev, 0x01, val);
+        //Write ENE value
+        bus->i2c_smbus_write_byte_data(dev, 0x01, val);
+        return;
+    }
+
+    for(int attempt = 0; attempt < ENE_CHECKED_IO_ATTEMPTS; attempt++)
+    {
+        if((SetRegisterPointer(dev, reg) >= 0) && (bus->i2c_smbus_write_byte_data(dev, 0x01, val) >= 0))
+        {
+            return;
+        }
+
+        std::this_thread::sleep_for(ENE_CHECKED_IO_RETRY_DELAY);
+    }
 }
 
 void ENESMBusInterface_i2c_smbus::ENERegisterWriteBlock(ene_dev_id dev, ene_register reg, unsigned char * data, unsigned char sz)
 {
     //Write ENE register
-    bus->i2c_smbus_write_word_data(dev, 0x00, ((reg << 8) & 0xFF00) | ((reg >> 8) & 0x00FF));
+    SetRegisterPointer(dev, reg);
 
     //Write ENE block data
     if(bus->i2c_smbus_write_block_data(dev, 0x03, sz, data) == -1)
